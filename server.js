@@ -6,7 +6,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "http://localhost:3000", // Replace with the URL of your React app
+    origin: ["http://localhost:3000","https://video-chat-self.vercel.app"], // Replace with the URL of your React app
     methods: ["GET", "POST"]
   }
 });
