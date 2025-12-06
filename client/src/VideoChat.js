@@ -23,8 +23,25 @@ const VideoChat = () => {
   const [showMusicInput, setShowMusicInput] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMusicActive, setIsMusicActive] = useState(false);
-  const audioRef = useRef(new Audio());
+  const audioRef = useRef(null);
   const lastSyncTime = useRef(0);
+  
+  // Initialize audio element on mount
+  useEffect(() => {
+    // Create audio element optimized for music playback
+    const audio = new Audio();
+    audio.preload = 'auto';
+    audio.volume = 1.0;
+    audio.crossOrigin = 'anonymous';
+    audioRef.current = audio;
+    
+    return () => {
+      if (audio) {
+        audio.pause();
+        audio.src = '';
+      }
+    };
+  }, []);
 
   const configuration = {
     iceServers: [
@@ -34,7 +51,7 @@ const VideoChat = () => {
     ],
   };
   useEffect(() => {
-    // Get the local stream (video/audio)
+    // Get the local stream (video/audio for WebRTC call)
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
@@ -45,6 +62,20 @@ const VideoChat = () => {
         console.error('Error accessing media devices.', error);
         alert('Could not access your camera and microphone. Please allow access and try again.');
       });
+
+    // Configure music audio element for native device playback (separate from WebRTC)
+    const audio = audioRef.current;
+    if (audio && audio.setSinkId) {
+      // Route music to device's default speakers (not through WebRTC call)
+      navigator.mediaDevices.enumerateDevices().then(devices => {
+        const audioOutput = devices.find(device => device.kind === 'audiooutput');
+        if (audioOutput) {
+          audio.setSinkId(audioOutput.deviceId)
+            .then(() => console.log('Music routed to device speakers'))
+            .catch(e => console.log('setSinkId error:', e));
+        }
+      });
+    }
 
     // Listen for new ICE candidate
     socket.on('new-ice-candidate', handleNewIceCandidate);
@@ -68,17 +99,21 @@ const VideoChat = () => {
       // Listen for incoming answer
       socket.on('receive-answer', handleReceiveAnswer);
       
-      // Listen for music streaming events
+      // Listen for music streaming events (URL sharing only, not audio stream)
       socket.on('peer-streaming-status', (data) => {
         console.log('Received peer-streaming-status:', data);
         if (data.isStreaming && data.musicUrl) {
-          console.log('Setting music URL:', data.musicUrl);
+          console.log('Loading music URL locally:', data.musicUrl);
           setCurrentMusicUrl(data.musicUrl);
           setIsMusicActive(true);
-          // Auto-load the audio
-          if (audioRef.current) {
-            audioRef.current.src = data.musicUrl;
-            audioRef.current.load();
+          
+          // Load audio file directly on this device (not through WebRTC)
+          const audio = audioRef.current;
+          if (audio) {
+            audio.src = data.musicUrl;
+            audio.volume = 1.0; // Full volume for device playback
+            audio.load();
+            console.log('Audio loaded locally on device');
           }
         } else {
           console.log('Clearing music');
@@ -202,43 +237,55 @@ const VideoChat = () => {
     }
     
     // Validate URL
+    let processedUrl = musicUrl.trim();
     try {
-      new URL(musicUrl);
+      new URL(processedUrl);
     } catch (e) {
       alert('Please enter a valid URL');
       return;
     }
     
-    const musicData = { isStreaming: true, musicUrl: musicUrl };
+    // Convert GitHub URLs to raw content URLs
+    if (processedUrl.includes('github.com') && processedUrl.includes('/blob/')) {
+      processedUrl = processedUrl.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
+      console.log('Converted GitHub URL to:', processedUrl);
+    }
+    
+    const musicData = { isStreaming: true, musicUrl: processedUrl };
     console.log('Sharing music:', musicData);
     
     setIsStreaming(true);
     setIsMusicActive(true);
-    setCurrentMusicUrl(musicUrl);
+    setCurrentMusicUrl(processedUrl);
     setShowMusicInput(false);
     
-    // Load audio locally
-    audioRef.current.src = musicUrl;
-    audioRef.current.load();
+    // Load and configure audio for native playback
+    const audio = audioRef.current;
+    audio.src = processedUrl;
+    audio.load();
     
-    socket.emit('streaming-status', roomId, musicData);
+    // Ensure audio plays through device speakers, not call
+    audio.onloadedmetadata = () => {\n      console.log('Audio loaded, duration:', audio.duration);\n      // Force audio to play through default output device\n      audio.play().then(() => {\n        console.log('Auto-play started');\n        setIsPlaying(true);\n        // Sync with peer\n        socket.emit('music-control', roomId, {\n          action: 'play',\n          timestamp: 0,\n          serverTime: Date.now()\n        });\n      }).catch(e => console.log('Auto-play prevented:', e));\n    };\n    \n    socket.emit('streaming-status', roomId, musicData);
   };
   
   const togglePlayPause = () => {
     const newPlayState = !isPlaying;
     setIsPlaying(newPlayState);
     
-    const currentTime = audioRef.current.currentTime;
+    const audio = audioRef.current;
+    const currentTime = audio.currentTime;
     const action = newPlayState ? 'play' : 'pause';
     
-    // Sync locally
+    // Play/pause locally with proper audio routing
     if (newPlayState) {
-      audioRef.current.play().catch(e => console.error('Play failed:', e));
+      // Ensure volume is at maximum for device playback
+      audio.volume = 1.0;
+      audio.play().catch(e => console.error('Play failed:', e));
     } else {
-      audioRef.current.pause();
+      audio.pause();
     }
     
-    // Emit to peer for sync
+    // Emit to peer for sync (only control commands, not audio stream)
     socket.emit('music-control', roomId, {
       action: action,
       timestamp: currentTime,
@@ -262,19 +309,24 @@ const VideoChat = () => {
     }
     lastSyncTime.current = now;
     
-    if (audioRef.current) {
+    const audio = audioRef.current;
+    if (audio && audio.src) {
+      // Ensure full volume for native device playback
+      audio.volume = 1.0;
+      
       // Sync time with latency compensation
-      const timeDiff = Math.abs(audioRef.current.currentTime - adjustedTime);
+      const timeDiff = Math.abs(audio.currentTime - adjustedTime);
       if (timeDiff > 0.5) { // Only sync if difference > 0.5s
-        audioRef.current.currentTime = adjustedTime;
+        audio.currentTime = adjustedTime;
         console.log(`Synced to ${adjustedTime}s (latency: ${latency}ms)`);
       }
       
       if (data.action === 'play') {
-        audioRef.current.play().catch(e => console.error('Play failed:', e));
+        // Play through device speakers, not WebRTC
+        audio.play().catch(e => console.error('Play failed:', e));
         setIsPlaying(true);
       } else if (data.action === 'pause') {
-        audioRef.current.pause();
+        audio.pause();
         setIsPlaying(false);
       }
     }
