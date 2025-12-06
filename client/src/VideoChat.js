@@ -265,7 +265,22 @@ const VideoChat = () => {
     audio.load();
     
     // Ensure audio plays through device speakers, not call
-    audio.onloadedmetadata = () => {\n      console.log('Audio loaded, duration:', audio.duration);\n      // Force audio to play through default output device\n      audio.play().then(() => {\n        console.log('Auto-play started');\n        setIsPlaying(true);\n        // Sync with peer\n        socket.emit('music-control', roomId, {\n          action: 'play',\n          timestamp: 0,\n          serverTime: Date.now()\n        });\n      }).catch(e => console.log('Auto-play prevented:', e));\n    };\n    \n    socket.emit('streaming-status', roomId, musicData);
+    audio.onloadedmetadata = () => {
+      console.log('Audio loaded, duration:', audio.duration);
+      // Force audio to play through default output device
+      audio.play().then(() => {
+        console.log('Auto-play started');
+        setIsPlaying(true);
+        // Sync with peer
+        socket.emit('music-control', roomId, {
+          action: 'play',
+          timestamp: 0,
+          serverTime: Date.now()
+        });
+      }).catch(e => console.log('Auto-play prevented:', e));
+    };
+    
+    socket.emit('streaming-status', roomId, musicData);
   };
   
   const togglePlayPause = () => {
