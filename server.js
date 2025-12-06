@@ -6,7 +6,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:3000","https://video-chat-self.vercel.app"], // Replace with the URL of your React app
+    origin: ["http://localhost:3000","https://video-chat-self.vercel.app","https://peer2.vercel.app"], // Replace with the URL of your React app
     methods: ["GET", "POST"]
   }
 });
@@ -51,6 +51,21 @@ io.on('connection', (socket) => {
   // Handle ICE candidate exchange
   socket.on('ice-candidate', (roomId, candidate) => {
     socket.broadcast.to(roomId).emit('new-ice-candidate', candidate);
+  });
+
+  // Handle music streaming status
+  socket.on('streaming-status', (roomId, data) => {
+    console.log(`User ${socket.id} in room ${roomId} streaming status:`, data);
+    const room = io.sockets.adapter.rooms.get(roomId);
+    console.log(`Room ${roomId} has ${room ? room.size : 0} members`);
+    socket.broadcast.to(roomId).emit('peer-streaming-status', data);
+    console.log(`Broadcasted peer-streaming-status to room ${roomId}`);
+  });
+
+  // Handle music control events (play/pause/seek)
+  socket.on('music-control', (roomId, data) => {
+    console.log(`User ${socket.id} music control:`, data.action);
+    socket.broadcast.to(roomId).emit('music-control', data);
   });
 
   socket.on('disconnect', () => {
