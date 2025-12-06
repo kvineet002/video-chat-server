@@ -23,6 +23,10 @@ const VideoChat = () => {
   const [showMusicInput, setShowMusicInput] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMusicActive, setIsMusicActive] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlayerExpanded, setIsPlayerExpanded] = useState(true);
+  const [volume, setVolume] = useState(1.0);
   const audioRef = useRef(null);
   const lastSyncTime = useRef(0);
   
@@ -35,8 +39,29 @@ const VideoChat = () => {
     audio.crossOrigin = 'anonymous';
     audioRef.current = audio;
     
+    // Event listeners for progress tracking
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+    };
+    
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration);
+    };
+    
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setCurrentTime(0);
+    };
+    
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+    audio.addEventListener('ended', handleEnded);
+    
     return () => {
       if (audio) {
+        audio.removeEventListener('timeupdate', handleTimeUpdate);
+        audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+        audio.removeEventListener('ended', handleEnded);
         audio.pause();
         audio.src = '';
       }
@@ -310,6 +335,36 @@ const VideoChat = () => {
     console.log(`${action} music at ${currentTime}s`);
   };
   
+  const handleSeek = (newTime) => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.currentTime = newTime;
+      setCurrentTime(newTime);
+      
+      // Sync seek with peer
+      socket.emit('music-control', roomId, {
+        action: 'seek',
+        timestamp: newTime,
+        serverTime: Date.now()
+      });
+    }
+  };
+  
+  const handleVolumeChange = (newVolume) => {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.volume = newVolume;
+      setVolume(newVolume);
+    }
+  };
+  
+  const formatTime = (seconds) => {
+    if (isNaN(seconds)) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const handleMusicControl = (data) => {
     console.log('Received music control:', data);
     
@@ -343,6 +398,9 @@ const VideoChat = () => {
       } else if (data.action === 'pause') {
         audio.pause();
         setIsPlaying(false);
+      } else if (data.action === 'seek') {
+        audio.currentTime = adjustedTime;
+        setCurrentTime(adjustedTime);
       }
     }
   };
@@ -459,64 +517,136 @@ const VideoChat = () => {
 
       {/* Synchronized Music Player */}
       {isMusicActive && (
-        <div className="fixed top-20 left-1/2 transform -translate-x-1/2 w-11/12 md:w-2/3 lg:w-1/2 bg-gradient-to-br from-purple-900 to-gray-900 rounded-2xl shadow-2xl overflow-hidden z-40">
-          <div className="bg-purple-600 px-4 md:px-6 py-3 flex justify-between items-center">
+        <div className={`fixed ${isPlayerExpanded ? 'top-20 left-1/2 transform -translate-x-1/2 w-11/12 md:w-2/3 lg:w-1/2' : 'bottom-24 md:bottom-28 right-4 w-80'} bg-gradient-to-br from-purple-900 to-gray-900 rounded-2xl shadow-2xl overflow-hidden z-40 transition-all duration-300`}>
+          <div className="bg-purple-600 px-4 md:px-6 py-3 flex justify-between items-center cursor-pointer" onClick={() => setIsPlayerExpanded(!isPlayerExpanded)}>
             <span className="text-white font-bold text-sm md:text-base flex items-center gap-2">
-              <svg className="w-5 h-5 md:w-6 md:h-6 animate-pulse" fill="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-5 h-5 md:w-6 md:h-6 ${isPlaying ? 'animate-pulse' : ''}`} fill="currentColor" viewBox="0 0 24 24">
                 <path d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
               </svg>
               {isStreaming ? 'Your Music' : 'Listening Together'}
             </span>
-            {isStreaming && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={stopMusicStream}
-                className="text-white hover:text-red-300 transition-colors p-1"
-                title="Stop streaming"
+                onClick={(e) => { e.stopPropagation(); setIsPlayerExpanded(!isPlayerExpanded); }}
+                className="text-white hover:text-gray-300 transition-colors p-1"
+                title={isPlayerExpanded ? 'Minimize' : 'Expand'}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+                  {isPlayerExpanded ? (
+                    <path strokeLinecap="round" d="M19 9l-7 7-7-7"/>
+                  ) : (
+                    <path strokeLinecap="round" d="M5 15l7-7 7 7"/>
+                  )}
                 </svg>
               </button>
-            )}
+              {isStreaming && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); stopMusicStream(); }}
+                  className="text-white hover:text-red-300 transition-colors p-1"
+                  title="Stop streaming"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
           
-          <div className="p-6 md:p-8">
-            <div className="flex flex-col items-center">
-              {/* Album Art Placeholder */}
-              <div className="w-32 h-32 md:w-40 md:h-40 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full mb-6 flex items-center justify-center shadow-lg">
-                <svg className="w-16 h-16 md:w-20 md:h-20 text-white" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
-                </svg>
-              </div>
-              
-              {/* Song Info */}
-              <p className="text-white text-sm md:text-base mb-6 text-center px-4 break-all">
-                {currentMusicUrl.split('/').pop().split('?')[0] || 'Music Track'}
+          {isPlayerExpanded && (
+            <div className="p-6 md:p-8">
+              <div className="flex flex-col items-center">
+                {/* Album Art Placeholder */}
+                <div className="w-32 h-32 md:w-40 md:h-40 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full mb-6 flex items-center justify-center shadow-lg">
+                  <svg className="w-16 h-16 md:w-20 md:h-20 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+                  </svg>
+                </div>
+                
+                {/* Song Info */}
+              <p className="text-white text-sm md:text-base mb-4 text-center px-4 break-all font-semibold">
+                {currentMusicUrl.split('/').pop().split('?')[0].substring(0, 40) || 'Music Track'}
               </p>
               
+              {/* Progress Bar */}
+              <div className="w-full mb-6">
+                <input
+                  type="range"
+                  min="0"
+                  max={duration || 100}
+                  value={currentTime}
+                  onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                  className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                  style={{
+                    background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${(currentTime / duration) * 100}%, #374151 ${(currentTime / duration) * 100}%, #374151 100%)`
+                  }}
+                />
+                <div className="flex justify-between text-xs text-gray-400 mt-2">
+                  <span>{formatTime(currentTime)}</span>
+                  <span>{formatTime(duration)}</span>
+                </div>
+              </div>
+              
               {/* Play/Pause Controls */}
-              <div className="flex items-center gap-4 md:gap-6">
+              <div className="flex items-center gap-6 mb-4">
+                <button
+                  onClick={() => handleSeek(Math.max(0, currentTime - 10))}
+                  className="text-white hover:text-purple-300 transition-colors"
+                  title="Rewind 10s"
+                >
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/>
+                  </svg>
+                </button>
+                
                 <button
                   onClick={togglePlayPause}
-                  className="bg-white hover:bg-gray-100 text-purple-600 rounded-full p-4 md:p-5 shadow-lg transition-all active:scale-95"
+                  className="bg-white hover:bg-gray-100 text-purple-600 rounded-full p-4 shadow-lg transition-all active:scale-95"
                 >
                   {isPlaying ? (
-                    <svg className="w-8 h-8 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/>
                     </svg>
                   ) : (
-                    <svg className="w-8 h-8 md:w-10 md:h-10" fill="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
                       <path d="M8 5v14l11-7z"/>
                     </svg>
                   )}
                 </button>
+                
+                <button
+                  onClick={() => handleSeek(Math.min(duration, currentTime + 10))}
+                  className="text-white hover:text-purple-300 transition-colors"
+                  title="Forward 10s"
+                >
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/>
+                  </svg>
+                </button>
               </div>
               
-              <p className="text-gray-400 text-xs md:text-sm mt-4">
-                {isPlaying ? '🎵 Playing...' : '⏸ Paused'}
-              </p>
+              {/* Volume Control */}
+              <div className="w-full flex items-center gap-3">
+                <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                </svg>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={volume}
+                  onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                  className="flex-1 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                  style={{
+                    background: `linear-gradient(to right, #a855f7 0%, #a855f7 ${volume * 100}%, #374151 ${volume * 100}%, #374151 100%)`
+                  }}
+                />
+                <span className="text-white text-xs w-10">{Math.round(volume * 100)}%</span>
+              </div>
             </div>
           </div>
+          )}
         </div>
       )}
 
