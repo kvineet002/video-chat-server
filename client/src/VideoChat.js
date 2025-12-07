@@ -1,5 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
+import { Music, ArrowRight } from 'lucide-react';
+import InfoCard from './InfoCard';
 
 const socket = io('https://video-chat-server-jiiq.onrender.com'); // Change to your server address
 // const socket = io('http://localhost:5000'); // Change to your server address
@@ -32,6 +34,7 @@ const VideoChat = () => {
   const [availableFiles, setAvailableFiles] = useState([]);
   const [showFileList, setShowFileList] = useState(false);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  const [isPiPActive, setIsPiPActive] = useState(false);
   const audioRef = useRef(null);
   const lastSyncTime = useRef(0);
   
@@ -531,30 +534,101 @@ const VideoChat = () => {
     }
   };
 
+  const togglePictureInPicture = async () => {
+    try {
+      const videoElement = remoteVideoRef.current;
+      
+      if (!document.pictureInPictureElement) {
+        // Enter PiP mode
+        await videoElement.requestPictureInPicture();
+        setIsPiPActive(true);
+      } else {
+        // Exit PiP mode
+        await document.exitPictureInPicture();
+        setIsPiPActive(false);
+      }
+    } catch (error) {
+      console.error('Error toggling Picture-in-Picture:', error);
+    }
+  };
+
+  // Listen for PiP events
+  useEffect(() => {
+    const videoElement = remoteVideoRef.current;
+    
+    const handleEnterPiP = () => setIsPiPActive(true);
+    const handleLeavePiP = () => setIsPiPActive(false);
+    
+    if (videoElement) {
+      videoElement.addEventListener('enterpictureinpicture', handleEnterPiP);
+      videoElement.addEventListener('leavepictureinpicture', handleLeavePiP);
+    }
+    
+    return () => {
+      if (videoElement) {
+        videoElement.removeEventListener('enterpictureinpicture', handleEnterPiP);
+        videoElement.removeEventListener('leavepictureinpicture', handleLeavePiP);
+      }
+    };
+  }, []);
+
   return (
     <div>
-    <h1 className='text-center py-3 text-3xl font-bold text-purple-600 bg-purple-600 bg-opacity-20'>2PEER</h1>
+      <div className=' flex justify-center'>
+        <img src="/logo.png" alt="Logo" className=""/>
+    {/* <h1 className='text-center  text-3xl font-bold rounded-md w-min px-6 py-2 text-purple-600 bg-purple-600 bg-opacity-20'>2PEER</h1> */}
+      </div>
      
     {isJoined ? (
-      <div>
-        <h2 className='text-center text-xl font-bold py-3 text-green-600'>Your Room ID: {roomId}</h2>
-      </div>
+    <div className="flex flex-col items-center justify-center py-1">
+    <div className="relative px-8  flex flex-col items-center">
+        <span className="text-slate-500 font-bold text-[10px] uppercase tracking-[0.2em] mb-1">
+            Current Room ID
+        </span>
+        <h2 className="text-2xl font-mono font-bold text-[#bd95e2] drop-shadow-sm tracking-wider">
+            {roomId}
+        </h2>
+    </div>
+</div>
     ) : (
-      <div className='flex gap-4 md:gap-10 items-center justify-center py-3 px-4'>
-        <input
-          type="text"
-          placeholder="Enter Room ID or Create"
-          value={roomId}
-          className='border-2 border-green-600 rounded-md bg-green-600 bg-opacity-15 placeholder:text-gray-600 outline-none px-4 py-2 text-black focus:ring-2 focus:ring-green-500'
-          onChange={(e) => setRoomId(e.target.value)}
-        />
-        <button onClick={joinRoom} className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 py-2 rounded-lg transition-all whitespace-nowrap">
-          Join Room
-        </button>
+     <div className="w-full max-w-md mx-auto p-6 rounded-2xl ">
+  <label className="block text-slate-400 text-sm font-medium mb-2 ml-1">
+    Start Listening Together
+  </label>
+  
+  <div className="flex flex-col sm:flex-row gap-3">
+    <div className="relative flex-grow">
+      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+        <Music className="h-5 w-5 text-[#be88f0]" />
       </div>
+      <input
+        type="text"
+        placeholder="Enter 3-digit Room ID"
+        value={roomId}
+        maxLength={3}
+        onChange={(e) => {
+          const value = e.target.value.replace(/\D/g, '').slice(0, 3);
+          setRoomId(value);
+        }}
+        className="block w-full pl-10 pr-3 py-3 border-2 rounded-xl leading-5  text-black placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-[#E9D6FB] focus:border-[#E9D6FB] "
+      />
+    </div>
+
+    <button
+      onClick={joinRoom}
+      className="flex items-center justify-center gap-2 bg-[#c5a0e9] hover:bg-[#b58bdc] text-slate-900 font-bold py-3 px-6 rounded-xl shadow-[0_0_15px_rgba(233,214,251,0.3)] hover:shadow-[0_0_25px_rgba(233,214,251,0.5)] transition-all duration-300 transform hover:-translate-y-0.5"
+    >
+      <span>Join</span>
+      <ArrowRight className="h-4 w-4" />
+    </button>
+  </div>
+  <div>
+{/* <InfoCard/> */}
+    </div>
+</div>
     )}
    
-     <div className={`${!isJoined && 'hidden'} relative md:m-10 m-2`}>
+     <div className={`${!isJoined && 'hidden'} relative md:m-10 m-2 -mt-1`}>
   {/* Remote Video - Full Screen Background */}
   <div className="relative w-full min-h-[400px] md:min-h-[600px]">
     <video 
@@ -933,6 +1007,23 @@ const VideoChat = () => {
               </svg>
             )}
           </button>
+
+          {isPeerConnected && (
+            <button
+              onClick={togglePictureInPicture}
+              className={`p-2.5 md:p-3 rounded-full transition-all ${
+                isPiPActive 
+                  ? 'bg-purple-600 hover:bg-purple-700 active:scale-95' 
+                  : 'bg-blue-600 hover:bg-blue-700 active:scale-95'
+              } text-white font-bold`}
+              title={isPiPActive ? 'Exit Picture-in-Picture' : 'Enter Picture-in-Picture'}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 md:h-6 md:w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 4v16M17 4v16M3 8h18M3 12h18M3 16h18" />
+                <rect x="14" y="14" width="6" height="4" strokeWidth={2} rx="1" />
+              </svg>
+            </button>
+          )}
         </div>
       )}
     
