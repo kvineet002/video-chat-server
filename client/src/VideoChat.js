@@ -27,6 +27,11 @@ const VideoChat = () => {
   const [duration, setDuration] = useState(0);
   const [isPlayerExpanded, setIsPlayerExpanded] = useState(true);
   const [volume, setVolume] = useState(1.0);
+  const [currentSongTitle, setCurrentSongTitle] = useState('');
+  const [isConverting, setIsConverting] = useState(false);
+  const [availableFiles, setAvailableFiles] = useState([]);
+  const [showFileList, setShowFileList] = useState(false);
+  const [loadingFiles, setLoadingFiles] = useState(false);
   const audioRef = useRef(null);
   const lastSyncTime = useRef(0);
   
@@ -130,6 +135,7 @@ const VideoChat = () => {
         if (data.isStreaming && data.musicUrl) {
           console.log('Loading music URL locally:', data.musicUrl);
           setCurrentMusicUrl(data.musicUrl);
+          setCurrentSongTitle(data.title || data.musicUrl.split('/').pop().split('?')[0]);
           setIsMusicActive(true);
           
           // Load audio file directly on this device (not through WebRTC)
@@ -255,14 +261,15 @@ const VideoChat = () => {
     console.log('Stop streaming emitted to peer');
   };
   
-  const shareMusic = () => {
+  const shareMusic = async () => {
     if (!musicUrl.trim()) {
-      alert('Please enter a music URL (direct audio file: .mp3, .wav, .ogg)');
+      alert('Please enter a YouTube URL or direct audio file URL');
       return;
     }
     
-    // Validate URL
     let processedUrl = musicUrl.trim();
+    let songTitle = '';
+    
     try {
       new URL(processedUrl);
     } catch (e) {
@@ -270,18 +277,35 @@ const VideoChat = () => {
       return;
     }
     
+    // Check if it's a YouTube URL
+    if (processedUrl.includes('youtube.com') || processedUrl.includes('youtu.be')) {
+      try {
+        const result = await convertYouTubeUrl(processedUrl);
+        processedUrl = result.mp3Url;
+        songTitle = result.title;
+        console.log('Converted YouTube URL to MP3:', processedUrl);
+      } catch (error) {
+        alert('Failed to convert YouTube URL. Please try another link.');
+        return;
+      }
+    }
     // Convert GitHub URLs to raw content URLs
-    if (processedUrl.includes('github.com') && processedUrl.includes('/blob/')) {
+    else if (processedUrl.includes('github.com') && processedUrl.includes('/blob/')) {
       processedUrl = processedUrl.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/');
       console.log('Converted GitHub URL to:', processedUrl);
     }
     
-    const musicData = { isStreaming: true, musicUrl: processedUrl };
+    const musicData = { 
+      isStreaming: true, 
+      musicUrl: processedUrl,
+      title: songTitle || processedUrl.split('/').pop().split('?')[0]
+    };
     console.log('Sharing music:', musicData);
     
     setIsStreaming(true);
     setIsMusicActive(true);
     setCurrentMusicUrl(processedUrl);
+    setCurrentSongTitle(songTitle || processedUrl.split('/').pop().split('?')[0]);
     setShowMusicInput(false);
     
     // Load and configure audio for native playback
@@ -364,6 +388,88 @@ const VideoChat = () => {
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
+  
+  const fetchAvailableFiles = async () => {
+    setLoadingFiles(true);
+    try {
+      const response = await fetch('https://swc.iitg.ac.in/yt-convert/files');
+      const data = await response.json();
+      console.log('Fetched available files:', data.files);
+      setAvailableFiles(data.files);
+      
+    } catch (error) {
+      console.error('Error fetching files:', error);
+      setAvailableFiles([]);
+      alert('Failed to load available files');
+    } finally {
+      setLoadingFiles(false);
+    }
+  };
+  
+  const convertYouTubeUrl = async (ytUrl) => {
+    setIsConverting(true);
+    try {
+      const response = await fetch(`https://swc.iitg.ac.in/yt-convert/api?v=${encodeURIComponent(ytUrl)}`);
+      const data = await response.json();
+      
+      if (data.success && data.mp3Url) {
+        return {
+          mp3Url: data.mp3Url,
+          title: data.title,
+          duration: data.duration
+        };
+      } else {
+        throw new Error(data.message || 'Conversion failed');
+      }
+    } catch (error) {
+      console.error('Error converting YouTube URL:', error);
+      throw error;
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const playFromList = (file) => {
+    console.log('Playing from list:', file);
+    
+    const mp3Url = file.mp3Url || file.url;
+    const songTitle = file.title || file.filename;
+    
+    const musicData = { 
+      isStreaming: true, 
+      musicUrl: mp3Url,
+      title: songTitle
+    };
+    
+    setIsStreaming(true);
+    setIsMusicActive(true);
+    setCurrentMusicUrl(mp3Url);
+    setCurrentSongTitle(songTitle);
+    setShowFileList(false);
+    setShowMusicInput(false);
+    
+    // Stop current audio and load new one
+    const audio = audioRef.current;
+    audio.pause();
+    audio.currentTime = 0;
+    audio.src = mp3Url;
+    audio.load();
+    
+    audio.onloadedmetadata = () => {
+      console.log('Audio loaded from list:', songTitle, 'duration:', audio.duration);
+      audio.play().then(() => {
+        console.log('Playing:', songTitle);
+        setIsPlaying(true);
+        socket.emit('music-control', roomId, {
+          action: 'play',
+          timestamp: 0,
+          serverTime: Date.now()
+        });
+      }).catch(e => console.log('Auto-play prevented:', e));
+    };
+    
+    socket.emit('streaming-status', roomId, musicData);
+  };
 
   const handleMusicControl = (data) => {
     console.log('Received music control:', data);
@@ -426,21 +532,27 @@ const VideoChat = () => {
   };
 
   return (
-    <div className='  '>
-    <h1 className=' text-center py-3 text-3xl font-bold text-green-600 bg-green-600 bg-opacity-20 '>Video Chat</h1>
+    <div>
+    <h1 className='text-center py-3 text-3xl font-bold text-purple-600 bg-purple-600 bg-opacity-20'>2PEER</h1>
      
-    {(isJoined?<div>
-      <h2 className='text-center text-xl font-bold py-3  text-green-600'>Your Room ID: {roomId}</h2>
-    </div>:  <div className={` flex gap-10 items-center justify-center py-3  bg-emeral ${isJoined&&'hidden'} `}>
+    {isJoined ? (
+      <div>
+        <h2 className='text-center text-xl font-bold py-3 text-green-600'>Your Room ID: {roomId}</h2>
+      </div>
+    ) : (
+      <div className='flex gap-4 md:gap-10 items-center justify-center py-3 px-4'>
         <input
           type="text"
           placeholder="Enter Room ID or Create"
           value={roomId}
-          className='border-2 border-green-600 rounded-md p-1 bg-green-600 bg-opacity-15 placeholder:text-black outline-none px-4 py-2'
+          className='border-2 border-green-600 rounded-md bg-green-600 bg-opacity-15 placeholder:text-gray-600 outline-none px-4 py-2 text-black focus:ring-2 focus:ring-green-500'
           onChange={(e) => setRoomId(e.target.value)}
         />
-        <button onClick={joinRoom} className=" bg-green-600 text-white   font-bold px-4 p-2 rounded-lg">Join Room</button>
-      </div>)}
+        <button onClick={joinRoom} className="bg-green-600 hover:bg-green-700 text-white font-bold px-4 py-2 rounded-lg transition-all whitespace-nowrap">
+          Join Room
+        </button>
+      </div>
+    )}
    
       <div className={` ${!isJoined&&'hidden'} flex flex-wrap justify-center md:m-10 m-2 gap-3`}>
         <div className="relative">
@@ -478,25 +590,40 @@ const VideoChat = () => {
        
       </div>
 
-      {/* Music URL Input Modal */}
+      {/* Music URL Input Modal - For custom URLs */}
       {showMusicInput && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-[60] p-4">
           <div className="bg-gray-800 rounded-2xl p-6 md:p-8 max-w-md w-full">
-            <h3 className="text-white text-xl md:text-2xl font-bold mb-4">Share Music</h3>
-            <p className="text-gray-300 text-sm mb-4">
-              Paste a direct audio file URL (.mp3, .wav, .ogg, .m4a)
+            <h3 className="text-white text-xl md:text-2xl font-bold mb-4">Share Custom URL</h3>
+            <p className="text-gray-300 text-sm mb-2">
+              Paste a YouTube URL or direct audio file URL
             </p>
             <p className="text-gray-400 text-xs mb-4">
-              💡 Tip: Use services like SoundCloud, Dropbox, or Google Drive direct links
+              🎵 YouTube • 🎧 MP3/Audio files • 📁 GitHub links
             </p>
+            
+            {isConverting && (
+              <div className="bg-purple-600 bg-opacity-20 border border-purple-500 rounded-lg p-3 mb-4">
+                <p className="text-purple-300 text-sm flex items-center gap-2">
+                  <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Converting YouTube video to MP3...
+                </p>
+              </div>
+            )}
+            
             <input
               type="text"
               value={musicUrl}
               onChange={(e) => setMusicUrl(e.target.value)}
-              placeholder="https://example.com/song.mp3"
+              placeholder="https://youtube.com/watch?v=... or .mp3 URL"
               className="w-full bg-gray-700 text-white rounded-lg px-4 py-3 mb-4 outline-none focus:ring-2 focus:ring-purple-500"
-              onKeyPress={(e) => e.key === 'Enter' && shareMusic()}
+              onKeyPress={(e) => e.key === 'Enter' && !isConverting && shareMusic()}
+              disabled={isConverting}
             />
+            
             <div className="flex gap-3">
               <button
                 onClick={() => setShowMusicInput(false)}
@@ -506,11 +633,81 @@ const VideoChat = () => {
               </button>
               <button
                 onClick={shareMusic}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 rounded-lg transition-all"
+                disabled={isConverting}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-semibold py-3 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Share
+                {isConverting ? 'Converting...' : 'Share'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      
+      {/* File List Modal */}
+      {showFileList && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-2xl p-6 md:p-8 max-w-2xl w-full max-h-[80vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-white text-xl md:text-2xl font-bold">
+                Available Songs ({availableFiles.length})
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowMusicInput(true)}
+                  className="text-purple-400 hover:text-purple-300 transition-colors text-sm font-semibold px-3 py-1 rounded-lg hover:bg-purple-600 hover:bg-opacity-20 flex items-center gap-1"
+                  title="Add Custom URL"
+                >
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                  </svg>
+                  Custom URL
+                </button>
+                <button
+                  onClick={() => setShowFileList(false)}
+                  className="text-gray-400 hover:text-white transition-colors"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+            
+            {loadingFiles ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <svg className="animate-spin h-8 w-8 text-purple-500 mb-3" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p className="text-gray-400">Loading files...</p>
+              </div>
+            ) : availableFiles.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-400">No files available</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {availableFiles.map((file, index) => (
+                  <button
+                    key={index}
+                    onClick={() => playFromList(file)}
+                    className="w-full bg-gray-700 hover:bg-gray-600 rounded-lg p-4 text-left transition-all group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="bg-purple-600 rounded-full p-2 group-hover:bg-purple-500 transition-colors">
+                        <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M8 5v14l11-7z"/>
+                        </svg>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-semibold truncate">{file.filename}</p>
+            
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -526,6 +723,19 @@ const VideoChat = () => {
               {isStreaming ? 'Your Music' : 'Listening Together'}
             </span>
             <div className="flex items-center gap-2">
+              <button
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  setShowFileList(true);
+                  fetchAvailableFiles();
+                }}
+                className="text-white hover:text-gray-300 transition-colors p-1"
+                title="View All Songs"
+              >
+                <svg className="w-4 h-4 md:w-5 md:h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>
+                </svg>
+              </button>
               <button
                 onClick={(e) => { e.stopPropagation(); setIsPlayerExpanded(!isPlayerExpanded); }}
                 className="text-white hover:text-gray-300 transition-colors p-1"
@@ -654,7 +864,10 @@ const VideoChat = () => {
       {isJoined && isPeerConnected && !isMusicActive && (
         <div className="fixed bottom-20 md:bottom-24 left-1/2 transform -translate-x-1/2 bg-purple-900 bg-opacity-90 rounded-full px-4 md:px-6 py-2 md:py-3 shadow-lg z-50">
           <button
-            onClick={startMusicStream}
+            onClick={() => {
+              setShowFileList(true);
+              fetchAvailableFiles();
+            }}
             className="px-4 py-2 md:px-5 md:py-2.5 rounded-full transition-all font-semibold text-sm md:text-base bg-purple-600 hover:bg-purple-700 active:scale-95 text-white"
           >
             <span className="flex items-center gap-2">
