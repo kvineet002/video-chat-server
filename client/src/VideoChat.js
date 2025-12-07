@@ -34,6 +34,10 @@ const VideoChat = () => {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const audioRef = useRef(null);
   const lastSyncTime = useRef(0);
+  const [localVideoPosition, setLocalVideoPosition] = useState({ x: 20, y: 20 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const localVideoContainerRef = useRef(null);
   
   // Initialize audio element on mount
   useEffect(() => {
@@ -82,16 +86,51 @@ const VideoChat = () => {
   };
   useEffect(() => {
     // Get the local stream (video/audio for WebRTC call)
-    navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((stream) => {
+    const requestMediaAccess = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localStreamRef.current = stream;
-        localVideoRef.current.srcObject = stream; // Display local video
-      })
-      .catch((error) => {
-        console.error('Error accessing media devices.', error);
-        alert('Could not access your camera and microphone. Please allow access and try again.');
-      });
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+        }
+      } catch (error) {
+        console.error('Error accessing media devices:', error);
+        
+        // Provide specific error messages
+        let errorMessage = 'Camera/Microphone Access Issue:\n\n';
+        
+        if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+          errorMessage += '❌ Permission denied. Please:\n1. Click the camera icon in your browser address bar\n2. Allow camera and microphone access\n3. Reload the page';
+        } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+          errorMessage += '❌ No camera or microphone found. Please connect a device and reload.';
+        } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+          errorMessage += '❌ Camera/microphone is already in use by another application.\nClose other apps using your camera and reload.';
+        } else if (error.name === 'OverconstrainedError') {
+          errorMessage += '❌ Camera/microphone constraints could not be satisfied.\nTrying with basic settings...';
+          
+          // Try again with basic constraints
+          try {
+            const basicStream = await navigator.mediaDevices.getUserMedia({ 
+              video: { width: 640, height: 480 }, 
+              audio: true 
+            });
+            localStreamRef.current = basicStream;
+            if (localVideoRef.current) {
+              localVideoRef.current.srcObject = basicStream;
+            }
+            return; // Success with basic constraints
+          } catch (retryError) {
+            errorMessage = 'Could not access camera/microphone even with basic settings.';
+          }
+        } else {
+          errorMessage += `❌ ${error.message || 'Unknown error occurred'}`;
+        }
+        
+        alert(errorMessage);
+      }
+    };
+
+    requestMediaAccess();
 
     // Configure music audio element for native device playback (separate from WebRTC)
     const audio = audioRef.current;
@@ -531,6 +570,40 @@ const VideoChat = () => {
     }
   };
 
+  const handleMouseDown = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+    const rect = localVideoContainerRef.current.getBoundingClientRect();
+    setDragOffset({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    });
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (isDragging) {
+        setLocalVideoPosition({
+          x: e.clientX - dragOffset.x,
+          y: e.clientY - dragOffset.y
+        });
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    if (isDragging) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+    }
+  }, [isDragging, dragOffset]);
+
   return (
     <div>
     <h1 className='text-center py-3 text-3xl font-bold text-purple-600 bg-purple-600 bg-opacity-20'>2PEER</h1>
@@ -554,41 +627,80 @@ const VideoChat = () => {
       </div>
     )}
    
-      <div className={` ${!isJoined&&'hidden'} flex flex-wrap justify-center md:m-10 m-2 gap-3`}>
-        <div className="relative">
-          <video ref={localVideoRef} autoPlay playsInline muted  className="non-mirrored-video border-4 border-green-600 border-opacity-20 rounded-lg "/>
-          {!isCameraOn && isJoined && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 rounded-lg">
-              <svg className="w-16 h-16 md:w-20 md:h-20 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                <line x1="3" y1="3" x2="21" y2="21" strokeWidth={2} />
-              </svg>
-              <p className="text-gray-300 text-lg md:text-xl font-semibold">Camera Off</p>
-            </div>
-          )}
-        </div>
-       
-        <div className="relative">
-          <video ref={remoteVideoRef} autoPlay    className="non-mirrored-video border-4 border-green-600 border-opacity-20 rounded-lg "/>
-          {!isPeerConnected && isJoined && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 bg-opacity-95 rounded-lg backdrop-blur-sm p-4  h-[250px] ">
-              <div className="animate-pulse mb-3 md:mb-4">
-                <svg className="w-12 h-12 md:w-20 md:h-20 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {/* Fullscreen Peer Video */}
+      {isJoined && (
+        <div className="fixed inset-0 top-16 bottom-0 bg-black">
+          <video 
+            ref={remoteVideoRef} 
+            autoPlay 
+            className="w-full h-full object-cover"
+            style={{ transform: 'scaleX(-1)' }}
+          />
+          {!isPeerConnected && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+              <div className="animate-pulse mb-4">
+                <svg className="w-16 h-16 md:w-24 md:h-24 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
               </div>
-              <p className="text-white text-lg md:text-2xl font-bold mb-1 md:mb-2 text-center">Waiting for peer...</p>
-              <p className="text-gray-400 text-xs md:text-sm text-center px-2">Share your Room ID to connect</p>
-              <div className="flex gap-1.5 md:gap-2 mt-3 md:mt-4">
-                <span className="w-1.5 h-1.5 md:w-2 md:h-2 bg-green-500 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></span>
-                <span className="w-1.5 h-1.5 md:w-2 md:h-2 bg-green-500 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></span>
-                <span className="w-1.5 h-1.5 md:w-2 md:h-2 bg-green-500 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></span>
+              <p className="text-white text-2xl md:text-3xl font-bold mb-2 text-center">Waiting for peer...</p>
+              <p className="text-gray-400 text-sm md:text-base text-center px-4">Share your Room ID to connect</p>
+              <div className="flex gap-2 mt-4">
+                <span className="w-2 h-2 md:w-3 md:h-3 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '0ms'}}></span>
+                <span className="w-2 h-2 md:w-3 md:h-3 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '150ms'}}></span>
+                <span className="w-2 h-2 md:w-3 md:h-3 bg-purple-500 rounded-full animate-bounce" style={{animationDelay: '300ms'}}></span>
               </div>
             </div>
           )}
         </div>
-       
-      </div>
+      )}
+
+      {/* Draggable Local Video */}
+      {isJoined && (
+        <div
+          ref={localVideoContainerRef}
+          className="fixed z-50 cursor-move shadow-2xl select-none"
+          style={{
+            left: `${localVideoPosition.x}px`,
+            top: `${localVideoPosition.y}px`,
+            width: '200px',
+            height: '150px',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            MozUserSelect: 'none',
+            msUserSelect: 'none'
+          }}
+          onMouseDown={handleMouseDown}
+        >
+          <div className="relative w-full h-full rounded-lg overflow-hidden border-2 border-purple-600 shadow-lg shadow-purple-500/50 bg-gray-900">
+            <video 
+              ref={(el) => {
+                localVideoRef.current = el;
+                if (el && localStreamRef.current) {
+                  el.srcObject = localStreamRef.current;
+                }
+              }}
+              autoPlay 
+              playsInline 
+              muted  
+              className="w-full h-full object-cover"
+              style={{ transform: 'scaleX(-1)' }}
+            />
+            {!isCameraOn && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
+                <svg className="w-12 h-12 text-gray-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  <line x1="3" y1="3" x2="21" y2="21" strokeWidth={2} />
+                </svg>
+                <p className="text-gray-300 text-xs font-semibold">Camera Off</p>
+              </div>
+            )}
+            <div className="absolute top-1 left-1 bg-black bg-opacity-60 text-white text-xs px-2 py-1 rounded">
+              You
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Music URL Input Modal - For custom URLs */}
       {showMusicInput && (
